@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Super App CEP - Colônia Treze</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class', // Ativa modo dark via classe 'dark'
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Poppins', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            light: '#f3f4f6',
+                            DEFAULT: '#3b82f6',
+                            dark: '#1e3a8a',
+                        }
+                    },
+                    boxShadow: {
+                        'up': '0 -10px 40px -5px rgba(0, 0, 0, 0.1)',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { overflow: hidden; transition: background 0.5s ease; -webkit-tap-highlight-color: transparent; }
+        
+        /* Tema Claro (Padrão) - Gradiente Suave */
+        body.light-mode { background: linear-gradient(135deg, #f0f4ff 0%, #e0e7ff 100%); color: #1f2937; }
+        
+        /* Tema Escuro (Opcional) */
+        body.dark-mode { background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); color: #f3f4f6; }
+
+        /* Glassmorphism Adaptável */
+        .glass-panel {
+            transition: all 0.3s ease;
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        /* Estilo Claro para Paineis */
+        body.light-mode .glass-panel {
+            background: rgba(255, 255, 255, 0.85);
+            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.1);
+        }
+        
+        /* Estilo Escuro para Paineis */
+        body.dark-mode .glass-panel {
+            background: rgba(15, 23, 42, 0.7);
+            border-color: rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Card de Resultado (Slide Up Mobile First) */
+        .result-card {
+            transition: transform 0.5s cubic-bezier(0.32, 0.72, 0, 1);
+            transform: translateY(110%);
+            border-radius: 24px 24px 0 0;
+            z-index: 50;
+            max-height: 85vh; /* Não ocupa toda a tela */
+            overflow-y: auto;
+            overscroll-behavior: contain; /* Evita scroll na página de fundo */
+        }
+        .result-card.active { transform: translateY(0); }
+        
+        body.light-mode .result-card { background: #ffffff; box-shadow: 0 -10px 40px rgba(0,0,0,0.15); }
+        body.dark-mode .result-card { background: rgba(30, 41, 59, 0.98); border-top: 1px solid rgba(255,255,255,0.1); }
+
+        /* Mapa */
+        #map { height: 100vh; width: 100vw; z-index: 0; }
+
+        /* Scrollbar customizada sutil */
+        .custom-scroll::-webkit-scrollbar { width: 4px; }
+        .custom-scroll::-webkit-scrollbar-track { background: transparent; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: rgba(156, 163, 175, 0.5); border-radius: 4px; }
+
+        /* Animações */
+        .search-input { transition: all 0.3s ease; }
+        .search-input:focus { transform: scale(1.01); }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .list-item { animation: fadeIn 0.3s ease forwards; }
+
+        /* --- 💓 ANIMAÇÃO PULSANTE DO MARCADOR --- */
+        @keyframes pulse-animation {
+            0% { transform: scale(1) translateY(0); filter: drop-shadow(0 0 0 rgba(147, 51, 234, 0.7)); }
+            50% { transform: scale(1.1) translateY(-10px); filter: drop-shadow(0 15px 15px rgba(147, 51, 234, 0.3)); }
+            100% { transform: scale(1) translateY(0); filter: drop-shadow(0 0 0 rgba(147, 51, 234, 0.7)); }
+        }
+
+        .pulsing-pin {
+            animation: pulse-animation 2s infinite ease-in-out;
+            pointer-events: none; 
+            transform-origin: bottom center;
+        }
+    </style>
+</head>
+<body class="light-mode h-screen w-screen relative overflow-hidden">
+
+    <div id="map"></div>
+
+    <!-- UI LAYER (Camada de Interface) -->
+    <div class="absolute inset-0 pointer-events-none flex flex-col z-10">
+        
+        <!-- HEADER & BUSCA -->
+        <div class="p-4 w-full max-w-lg mx-auto pointer-events-auto">
+            
+            <!-- Top Bar: Level & Theme -->
+            <div class="glass-panel p-2 pr-3 pl-3 rounded-full flex items-center justify-between mb-4 shadow-sm mx-auto w-fit md:w-full transition-all">
+                <div class="flex items-center gap-3">
+                    <div class="bg-gradient-to-br from-blue-500 to-indigo-600 w-8 h-8 rounded-full flex items-center justify-center shadow-md text-white font-bold text-xs">
+                        <span id="user-level">1</span>
+                    </div>
+                    <div class="flex flex-col w-24 md:w-32">
+                        <div class="w-full bg-gray-200 dark:bg-gray-700 h-1.5 rounded-full overflow-hidden">
+                            <div id="xp-bar" class="h-full bg-blue-500 w-0 transition-all duration-500 rounded-full"></div>
+                        </div>
+                        <span class="text-[9px] font-bold opacity-60 uppercase mt-0.5 text-right">Explorador</span>
+                    </div>
+                </div>
+                <button onclick="toggleTheme()" class="ml-3 w-8 h-8 rounded-full hover:bg-black/5 dark:hover:bg-white/10 flex items-center justify-center transition-colors text-yellow-500 dark:text-blue-300">
+                    <i id="theme-icon" class="fas fa-sun text-sm"></i>
+                </button>
+            </div>
+
+            <!-- BARRA DE BUSCA -->
+            <div class="relative group w-full shadow-xl rounded-2xl">
+                <div class="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none">
+                    <i class="fas fa-search text-gray-400 group-focus-within:text-blue-500 transition-colors"></i>
+                </div>
+                <input type="text" id="search-input" 
+                    class="glass-panel search-input w-full py-4 pl-12 pr-12 rounded-2xl placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 border border-white/20 shadow-sm text-gray-800 dark:text-white text-base"
+                    placeholder="Qual rua você procura?">
+                
+                <!-- Loader no input -->
+                <div id="search-loader" class="absolute inset-y-0 right-4 flex items-center hidden">
+                    <i class="fas fa-circle-notch fa-spin text-blue-500"></i>
+                </div>
+
+                <!-- PAINEL DE SUGESTÕES (Dropdown) -->
+                <div id="search-panel" class="absolute top-full left-0 right-0 mt-2 glass-panel rounded-xl overflow-hidden transition-all duration-300 opacity-0 invisible transform -translate-y-2 pointer-events-auto max-h-[60vh] flex flex-col shadow-2xl">
+                    <!-- Abas -->
+                    <div class="flex border-b border-gray-200/50 dark:border-gray-700/50 bg-white/30 dark:bg-black/20 backdrop-blur-sm">
+                        <button onclick="switchTab('ranking')" class="flex-1 py-3 text-[10px] font-bold uppercase tracking-wide transition-colors text-blue-600 border-b-2 border-blue-500 tab-btn" data-tab="ranking">Populares</button>
+                        <button onclick="switchTab('history')" class="flex-1 py-3 text-[10px] font-bold uppercase tracking-wide transition-colors text-gray-500 tab-btn" data-tab="history">Recentes</button>
+                        <button onclick="switchTab('favorites')" class="flex-1 py-3 text-[10px] font-bold uppercase tracking-wide transition-colors text-gray-500 tab-btn" data-tab="favorites">Salvos</button>
+                    </div>
+                    <div id="tab-content" class="overflow-y-auto custom-scroll p-1 bg-white/80 dark:bg-slate-900/80 min-h-[150px]"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CONTROLES LATERAIS -->
+        <div class="absolute right-4 bottom-24 md:bottom-10 flex flex-col gap-3 pointer-events-auto pb-4"> <!-- Ajuste bottom para mobile -->
+            <button onclick="locateUser()" class="glass-panel w-12 h-12 rounded-full flex items-center justify-center text-blue-600 dark:text-blue-400 hover:scale-110 active:scale-90 transition-all shadow-lg bg-white dark:bg-slate-800" title="Minha Localização">
+                <i class="fas fa-crosshairs text-lg"></i>
+            </button>
+            <button onclick="resetApp()" class="glass-panel w-12 h-12 rounded-full flex items-center justify-center text-red-500 hover:scale-110 active:scale-90 transition-all shadow-lg bg-white dark:bg-slate-800" title="Limpar Dados">
+                <i class="fas fa-trash-alt text-lg"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- CARD DE RESULTADO (MODAL INFERIOR) -->
+    <div id="result-card" class="fixed bottom-0 left-0 right-0 result-card p-0 pointer-events-auto max-w-2xl mx-auto shadow-up flex flex-col">
+        
+        <!-- Área de Arrastar/Fechar -->
+        <div class="w-full p-2 cursor-pointer bg-transparent" onclick="closeCard()">
+            <div class="w-12 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full mx-auto"></div>
+        </div>
+        
+        <div class="px-6 pb-8 pt-2 overflow-y-auto custom-scroll">
+            <!-- Cabeçalho do Card -->
+            <div class="flex justify-between items-start mb-5">
+                <div>
+                    <span id="card-badge" class="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider text-white bg-blue-500 shadow-sm mb-2">Residencial</span>
+                    <h2 id="card-rua" class="text-xl md:text-2xl font-bold leading-tight text-gray-900 dark:text-white">Nome da Rua</h2>
+                    <div class="flex items-center gap-1.5 mt-1 text-gray-500 dark:text-gray-400 font-medium text-xs md:text-sm">
+                        <i class="fas fa-map-pin text-blue-500"></i>
+                        <p id="card-bairro">Bairro, Cidade - UF</p>
+                    </div>
+                </div>
+                <button onclick="toggleFavoriteCurrent()" id="btn-fav" class="w-10 h-10 rounded-full bg-gray-50 dark:bg-slate-700 flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all shadow-sm flex-shrink-0">
+                    <i class="fas fa-heart"></i>
+                </button>
+            </div>
+
+            <!-- CEP e Distância -->
+            <div class="grid grid-cols-2 gap-3 mb-6">
+                <div class="bg-gray-50 dark:bg-slate-800/50 p-3 rounded-xl border border-gray-100 dark:border-gray-700 text-center">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider">CEP</p>
+                    <p id="card-cep" class="text-lg font-mono font-bold text-gray-800 dark:text-gray-100">00000-000</p>
+                </div>
+                <div class="bg-gray-50 dark:bg-slate-800/50 p-3 rounded-xl border border-gray-100 dark:border-gray-700 text-center">
+                    <p class="text-[10px] text-gray-400 uppercase font-bold tracking-wider">Distância</p>
+                    <p id="card-dist" class="text-lg font-bold text-gray-800 dark:text-gray-100">0.0 km</p>
+                </div>
+            </div>
+
+            <!-- SERVIÇOS LOCAIS (INTEGRAÇÃO) -->
+            <h3 class="text-xs font-bold uppercase text-gray-400 mb-3 tracking-wider">Serviços Próximos</h3>
+            <div class="grid grid-cols-2 gap-3 mb-6">
+                <!-- Item Serviço -->
+                <div class="flex items-center gap-3 p-3 rounded-xl bg-blue-50/50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800/30">
+                    <div class="w-8 h-8 rounded-full bg-white dark:bg-slate-800 flex items-center justify-center text-blue-500 shadow-sm">
+                        <i class="fas fa-cloud-sun"></i>
+                    </div>
+                    <div>
+                        <p class="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">Clima</p>
+                        <p id="weather-temp" class="text-sm font-bold text-gray-800 dark:text-gray-200">--</p>
+                    </div>
+                </div>
+                <!-- Item Serviço -->
+                <div class="flex items-center gap-3 p-3 rounded-xl bg-yellow-50/50 dark:bg-yellow-900/10 border border-yellow-100 dark:border-yellow-800/30">
+                    <div class="w-8 h-8 rounded-full bg-white dark:bg-slate-800 flex items-center justify-center text-yellow-600 shadow-sm">
+                        <i class="fas fa-truck"></i>
+                    </div>
+                    <div>
+                        <p class="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">Correios</p>
+                        <p id="service-correios" class="text-sm font-bold text-gray-800 dark:text-gray-200">-- km</p>
+                    </div>
+                </div>
+                <!-- Item Serviço -->
+                <div class="flex items-center gap-3 p-3 rounded-xl bg-red-50/50 dark:bg-red-900/10 border border-red-100 dark:border-red-800/30">
+                    <div class="w-8 h-8 rounded-full bg-white dark:bg-slate-800 flex items-center justify-center text-red-500 shadow-sm">
+                        <i class="fas fa-heartbeat"></i>
+                    </div>
+                    <div>
+                        <p class="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">Saúde</p>
+                        <p id="service-saude" class="text-sm font-bold text-gray-800 dark:text-gray-200">-- km</p>
+                    </div>
+                </div>
+                <!-- Item Serviço -->
+                <div class="flex items-center gap-3 p-3 rounded-xl bg-purple-50/50 dark:bg-purple-900/10 border border-purple-100 dark:border-purple-800/30">
+                    <div class="w-8 h-8 rounded-full bg-white dark:bg-slate-800 flex items-center justify-center text-purple-500 shadow-sm">
+                        <i class="fas fa-shopping-basket"></i>
+                    </div>
+                    <div>
+                        <p class="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase">Mercado</p>
+                        <p id="service-mercado" class="text-sm font-bold text-gray-800 dark:text-gray-200">-- km</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Botões de Ação -->
+            <div class="grid grid-cols-2 gap-3">
+                <button onclick="copyCep()" class="py-3.5 rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-gray-700 dark:text-gray-200 font-semibold transition-colors flex items-center justify-center gap-2 active:scale-95">
+                    <i class="far fa-copy"></i> Copiar
+                </button>
+                <button onclick="shareWhatsapp()" class="py-3.5 rounded-xl bg-green-500 hover:bg-green-600 text-white font-semibold shadow-lg shadow-green-500/30 transition-colors flex items-center justify-center gap-2 active:scale-95">
+                    <i class="fab fa-whatsapp text-lg"></i> Enviar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOAST (Notificação Flutuante) -->
+    <div id="toast" class="fixed top-24 left-1/2 transform -translate-x-1/2 bg-white/90 dark:bg-slate-800/90 backdrop-blur-md px-5 py-2.5 rounded-full flex items-center gap-3 transition-all duration-500 opacity-0 translate-y-[-30px] pointer-events-none z-[60] shadow-xl border border-gray-100 dark:border-gray-700">
+        <div class="w-6 h-6 rounded-full bg-yellow-100 flex items-center justify-center text-yellow-600 text-xs">
+            <i id="toast-icon" class="fas fa-trophy"></i>
+        </div>
+        <span id="toast-msg" class="text-xs font-bold text-gray-800 dark:text-white">Notificação</span>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // --- CONFIGURAÇÃO E DADOS LOCAIS ---
+        const API_URL = 'http://localhost:3000/api';
+        const CENTER_COORDS = { lat: -10.9570, lng: -37.5610 }; // Colônia Treze Centro
+        
+        // Pontos de Interesse Fixos na Colônia Treze (Simulação)
+        const NEARBY_SERVICES = {
+            correios: { lat: -10.9580, lng: -37.5600 }, 
+            saude: { lat: -10.9550, lng: -37.5630 },    
+            mercado: { lat: -10.9575, lng: -37.5605 }   
+        };
+
+        // --- MAPA TILES ---
+        const TILES = {
+            light: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+            dark: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+        };
+
+        // API Wrapper
+        const API = {
+            buscar: async (query) => {
+                try {
+                    const res = await fetch(`${API_URL}/buscar?q=${query}`);
+                    return (await res.json()).data;
+                } catch(e) { return []; } 
+            },
+            ranking: async () => {
+                try {
+                    const res = await fetch(`${API_URL}/ranking`);
+                    return (await res.json()).data;
+                } catch(e) { return []; }
+            },
+            incrementarBusca: async (id) => {
+                try { await fetch(`${API_URL}/contar`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ id }) }); } catch(e) {}
+            },
+            geoMatch: async (lat, lng) => {
+                try {
+                    const res = await fetch(`${API_URL}/geo-match`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ endereco: `Lat:${lat},Lng:${lng}` })
+                    });
+                    return await res.json();
+                } catch(e) { return null; }
+            }
+        };
+
+        const STATE = {
+            xp: parseInt(localStorage.getItem('user_xp')) || 0,
+            level: parseInt(localStorage.getItem('user_level')) || 1,
+            history: JSON.parse(localStorage.getItem('user_history')) || [],
+            favorites: JSON.parse(localStorage.getItem('user_favorites')) || [],
+            currentResult: null,
+            theme: localStorage.getItem('app_theme') || 'light'
+        };
+
+        // --- INICIALIZAÇÃO DO MAPA ---
+        const map = L.map('map', { zoomControl: false }).setView([CENTER_COORDS.lat, CENTER_COORDS.lng], 15);
+        let currentTileLayer = L.tileLayer(TILES.light, { attribution: '', maxZoom: 20 }).addTo(map);
+
+        // Ícones
+        const createIcon = (color) => L.divIcon({
+            className: 'custom-marker',
+            html: `<svg width="48" height="48" viewBox="0 0 40 40" fill="none" style="filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));"><path d="M20 0C11.1634 0 4 7.16344 4 16C4 26.5 20 40 20 40C20 40 36 26.5 36 16C36 7.16344 28.8366 0 20 0Z" fill="${color}" stroke="white" stroke-width="2"/><circle cx="20" cy="16" r="6" fill="white" fill-opacity="0.9"/></svg>`,
+            iconSize: [48, 48], iconAnchor: [24, 48], popupAnchor: [0, -48]
+        });
+
+        const purpleIcon = L.divIcon({
+            className: 'pulsing-pin',
+            html: `<svg width="50" height="50" viewBox="0 0 24 24" fill="#9333EA" stroke="white" stroke-width="2" style="filter: drop-shadow(0 3px 5px rgba(0,0,0,0.3))"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3" fill="white"/></svg>`,
+            iconSize: [50, 50], iconAnchor: [25, 50], popupAnchor: [0, -50]
+        });
+
+        let currentMarker = null;
+
+        // --- CLIQUE NO MAPA (FlyTo + Efeito Pulsante) ---
+        map.on('click', async (e) => {
+            const { lat, lng } = e.latlng;
+
+            // 1. Move e Marca
+            map.flyTo([lat, lng], 17, { duration: 1.2 });
+            if (currentMarker) map.removeLayer(currentMarker);
+            currentMarker = L.marker([lat, lng], { icon: purpleIcon }).addTo(map);
+
+            // 2. Busca Reverso
+            try {
+                const resOSM = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+                const dataOSM = await resOSM.json();
+                let ruaNome = "Local Selecionado";
+                if (dataOSM && dataOSM.address) {
+                     ruaNome = dataOSM.address.road || dataOSM.address.pedestrian || dataOSM.address.suburb || dataOSM.address.hamlet || "Local sem nome";
+                }
+
+                const resDB = await fetch(`${API_URL}/geo-match`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ endereco: ruaNome })
+                });
+                const jsonDB = await resDB.json();
+
+                if (jsonDB.found) {
+                    confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
+                    selectLocation(jsonDB.data);
+                } else {
+                    // Mostra card com "Não encontrado" mas de forma amigável
+                    showNotFoundCard(ruaNome, lat, lng);
+                }
+            } catch (error) { console.error(error); }
+        });
+
+        function showNotFoundCard(rua, lat, lng) {
+            document.getElementById('card-rua').innerText = rua;
+            document.getElementById('card-bairro').innerText = "Local não cadastrado na base";
+            document.getElementById('card-cep').innerText = "Sem CEP";
+            
+            updateDistances(lat, lng);
+            
+            const badge = document.getElementById('card-badge');
+            badge.innerText = "Info";
+            badge.className = `px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider text-white bg-gray-400 shadow-sm`;
+
+            document.getElementById('result-card').classList.add('active');
+            document.getElementById('search-panel').classList.add('opacity-0', 'invisible', '-translate-y-2');
+        }
+
+        // --- DISTÂNCIAS E SERVIÇOS ---
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371; const dLat = (lat2 - lat1) * Math.PI / 180; const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+            return (R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))).toFixed(1);
+        }
+
+        function updateDistances(lat, lng) {
+            // Distancia do Centro
+            const distCentro = calculateDistance(CENTER_COORDS.lat, CENTER_COORDS.lng, lat, lng);
+            document.getElementById('card-dist').innerText = `${distCentro} km`;
+
+            // Serviços
+            document.getElementById('service-correios').innerText = `${calculateDistance(lat, lng, NEARBY_SERVICES.correios.lat, NEARBY_SERVICES.correios.lng)} km`;
+            document.getElementById('service-saude').innerText = `${calculateDistance(lat, lng, NEARBY_SERVICES.saude.lat, NEARBY_SERVICES.saude.lng)} km`;
+            document.getElementById('service-mercado').innerText = `${calculateDistance(lat, lng, NEARBY_SERVICES.mercado.lat, NEARBY_SERVICES.mercado.lng)} km`;
+
+            // Clima
+            fetchWeather(lat, lng);
+        }
+
+        async function fetchWeather(lat, lng) {
+            try {
+                document.getElementById('weather-temp').innerText = "...";
+                const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current_weather=true`);
+                const data = await res.json();
+                document.getElementById('weather-temp').innerText = `${data.current_weather.temperature}°C`;
+            } catch (e) { document.getElementById('weather-temp').innerText = "--"; }
+        }
+
+        // --- TEMA ---
+        function applyTheme(theme) {
+            document.body.className = theme === 'dark' ? 'dark-mode' : 'light-mode';
+            document.getElementById('theme-icon').className = theme === 'dark' ? 'fas fa-moon' : 'fas fa-sun';
+            currentTileLayer.setUrl(theme === 'dark' ? TILES.dark : TILES.light);
+            localStorage.setItem('app_theme', theme);
+            STATE.theme = theme;
+        }
+        function toggleTheme() { applyTheme(STATE.theme === 'light' ? 'dark' : 'light'); }
+        applyTheme(STATE.theme);
+
+        // --- GAMIFICAÇÃO ---
+        function updateGamification() {
+            const nextLevelXp = STATE.level * 100;
+            const percentage = Math.min(100, (STATE.xp / nextLevelXp) * 100);
+            document.getElementById('user-level').textContent = STATE.level;
+            document.getElementById('xp-bar').style.width = `${percentage}%`;
+            localStorage.setItem('user_xp', STATE.xp);
+            localStorage.setItem('user_level', STATE.level);
+        }
+        function addXP(amount) {
+            const nextLevelXp = STATE.level * 100;
+            STATE.xp += amount;
+            if (STATE.xp >= nextLevelXp) {
+                STATE.xp -= nextLevelXp;
+                STATE.level++;
+                showToast(`Nível ${STATE.level}!`, 'trophy');
+                confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+            }
+            updateGamification();
+        }
+        function showToast(msg, icon) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-icon').className = `fas fa-${icon}`;
+            document.getElementById('toast-msg').innerText = msg;
+            toast.classList.remove('opacity-0', 'translate-y-[-30px]');
+            setTimeout(() => toast.classList.add('opacity-0', 'translate-y-[-30px]'), 3000);
+        }
+
+        // --- LOGICA PRINCIPAL ---
+        const searchInput = document.getElementById('search-input');
+        const searchPanel = document.getElementById('search-panel');
+        const tabContent = document.getElementById('tab-content');
+        const resultCard = document.getElementById('result-card');
+
+        // Highlighting
+        function highlightMatch(text, query) {
+            if (!query || !text) return text;
+            const safeQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regex = new RegExp(`(${safeQuery})`, 'gi');
+            return text.replace(regex, '<span class="text-blue-600 dark:text-blue-400 font-bold bg-blue-100 dark:bg-blue-900/50 px-0.5 rounded">$1</span>');
+        }
+
+        searchInput.addEventListener('focus', () => {
+            searchPanel.classList.remove('opacity-0', 'invisible', '-translate-y-2');
+            renderTab('ranking');
+        });
+        
+        // Debounce Busca
+        let debounceTimer;
+        searchInput.addEventListener('input', (e) => {
+            const query = e.target.value;
+            clearTimeout(debounceTimer);
+            
+            if (query.length === 0) {
+                renderTab('ranking');
+                return;
+            }
+
+            document.getElementById('search-loader').classList.remove('hidden');
+            
+            debounceTimer = setTimeout(async () => {
+                const results = await API.buscar(query);
+                document.getElementById('search-loader').classList.add('hidden');
+                
+                if (results && results.length > 0) {
+                    renderList(results, true, null, query);
+                } else {
+                    const suggestions = await API.ranking();
+                    renderList(suggestions, false, "Nada encontrado. Sugestões:", query);
+                }
+            }, 300);
+        });
+
+        // Tabs
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                if(btn.dataset.tab === tab) {
+                    btn.classList.add('text-blue-600', 'border-b-2', 'border-blue-500');
+                    btn.classList.remove('text-gray-500');
+                } else {
+                    btn.classList.remove('text-blue-600', 'border-b-2', 'border-blue-500');
+                    btn.classList.add('text-gray-500');
+                }
+            });
+            renderTab(tab);
+        }
+
+        async function renderTab(tab) {
+            let data = [];
+            if (tab === 'ranking') data = await API.ranking();
+            else if (tab === 'history') data = STATE.history;
+            else if (tab === 'favorites') data = STATE.favorites;
+            renderList(data, false);
+        }
+
+        function renderList(items, isSearch, customMessage = null, searchQuery = '') {
+            tabContent.innerHTML = '';
+            if (customMessage) {
+                tabContent.innerHTML = `<div class="text-xs text-orange-500 font-bold px-3 mb-2 uppercase tracking-wide">${customMessage}</div>`;
+            }
+            if (!items || items.length === 0) {
+                tabContent.innerHTML += `<div class="text-center text-gray-400 py-8 text-xs font-medium">Lista vazia.</div>`;
+                return;
+            }
+            items.forEach((item, index) => {
+                const el = document.createElement('div');
+                el.style.animationDelay = `${index * 50}ms`; 
+                el.className = 'list-item flex items-center justify-between p-3 mb-1 hover:bg-blue-50 dark:hover:bg-white/5 rounded-xl cursor-pointer transition-all group border border-transparent hover:border-blue-100 dark:hover:border-white/10';
+                
+                const nomeDisplay = isSearch ? highlightMatch(item.nome_rua, searchQuery) : item.nome_rua;
+                const addressDetails = `${item.bairro || 'Bairro'} • ${item.cidade || 'Cidade'}`;
+
+                el.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-full bg-gray-100 dark:bg-slate-700 flex items-center justify-center text-gray-400 dark:text-gray-400 group-hover:bg-blue-500 group-hover:text-white transition-colors shadow-sm">
+                            <i class="fas fa-map-marker-alt text-xs"></i>
+                        </div>
+                        <div>
+                            <p class="text-sm font-semibold text-gray-700 dark:text-gray-200 group-hover:text-blue-600 dark:group-hover:text-blue-300 leading-tight">${nomeDisplay}</p>
+                            <p class="text-[10px] text-gray-400 font-medium mt-0.5">${addressDetails}</p>
+                        </div>
+                    </div>
+                    ${isSearch ? '' : `<span class="text-[10px] font-mono font-bold text-gray-400 bg-gray-100 dark:bg-slate-700 px-2 py-1 rounded-md">${item.cep ? item.cep.slice(-3) : '---'}</span>`}
+                `;
+                el.onclick = () => selectLocation(item);
+                tabContent.appendChild(el);
+            });
+        }
+
+        async function selectLocation(item) {
+            // Coordenadas default se faltar
+            if (!item.lat) {
+                try {
+                    const resGeo = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(`${item.nome_rua}, Lagarto, Sergipe`)}`);
+                    const dataGeo = await resGeo.json();
+                    if(dataGeo.length > 0) { item.lat = dataGeo[0].lat; item.lng = dataGeo[0].lon; }
+                    else { item.lat = CENTER_COORDS.lat; item.lng = CENTER_COORDS.lng; }
+                } catch(e) { item.lat = CENTER_COORDS.lat; item.lng = CENTER_COORDS.lng; }
+            }
+
+            STATE.currentResult = item;
+            await API.incrementarBusca(item.id);
+            
+            // Update History
+            STATE.history = STATE.history.filter(i => i.id !== item.id);
+            STATE.history.unshift(item);
+            if(STATE.history.length > 10) STATE.history.pop();
+            localStorage.setItem('user_history', JSON.stringify(STATE.history));
+            
+            addXP(10);
+            
+            // Map Logic
+            if (currentMarker) map.removeLayer(currentMarker);
+            currentMarker = L.marker([item.lat, item.lng], { icon: purpleIcon }).addTo(map);
+            map.flyTo([item.lat, item.lng], 17, { duration: 1.5 });
+            
+            confetti({ particleCount: 80, spread: 60, origin: { y: 0.8 }, colors: ['#3b82f6', '#8b5cf6'] });
+
+            // UI Updates
+            document.getElementById('card-rua').innerText = item.nome_rua;
+            document.getElementById('card-bairro').innerText = `${item.bairro || 'Bairro'}, ${item.cidade || 'Cidade'} - ${item.uf || 'SE'}`;
+            document.getElementById('card-cep').innerText = item.cep;
+            
+            updateDistances(item.lat, item.lng);
+
+            const badge = document.getElementById('card-badge');
+            const tipo = item.tipo || 'residencial';
+            badge.innerText = tipo;
+            badge.className = `inline-block px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider text-white shadow-sm mb-2 ${tipo === 'residencial' ? 'bg-blue-500' : (tipo === 'comercial' ? 'bg-purple-500' : 'bg-green-500')}`;
+
+            updateFavoriteBtnUI();
+            resultCard.classList.add('active');
+            searchPanel.classList.add('opacity-0', 'invisible', '-translate-y-2');
+        }
+
+        function closeCard() { resultCard.classList.remove('active'); }
+
+        function toggleFavoriteCurrent() {
+            if (!STATE.currentResult) return;
+            const idx = STATE.favorites.findIndex(i => i.id === STATE.currentResult.id);
+            if (idx > -1) { STATE.favorites.splice(idx, 1); showToast('Removido', 'trash'); }
+            else { STATE.favorites.push(STATE.currentResult); showToast('Salvo!', 'heart'); addXP(5); }
+            localStorage.setItem('user_favorites', JSON.stringify(STATE.favorites));
+            updateFavoriteBtnUI();
+        }
+
+        function updateFavoriteBtnUI() {
+            const btn = document.getElementById('btn-fav');
+            const isFav = STATE.currentResult && STATE.favorites.some(i => i.id === STATE.currentResult.id);
+            btn.className = isFav ? "w-10 h-10 rounded-full bg-red-50 dark:bg-red-900/30 flex items-center justify-center text-red-500 text-lg shadow-inner" : "w-10 h-10 rounded-full bg-gray-50 dark:bg-slate-700 flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all shadow-sm flex-shrink-0";
+            btn.innerHTML = isFav ? '<i class="fas fa-heart"></i>' : '<i class="far fa-heart"></i>';
+        }
+
+        function copyCep() { if(STATE.currentResult) { navigator.clipboard.writeText(STATE.currentResult.cep); showToast('Copiado!', 'copy'); } }
+        function shareWhatsapp() { if(STATE.currentResult) window.open(`https://wa.me/?text=${encodeURIComponent(`CEP de ${STATE.currentResult.nome_rua}: ${STATE.currentResult.cep}`)}`, '_blank'); }
+        function locateUser() { map.locate({setView: true, maxZoom: 16}); }
+        function resetApp() { if(confirm("Resetar tudo?")) { localStorage.clear(); location.reload(); } }
+
+        map.on('locationfound', (e) => { L.circle(e.latlng, e.accuracy).addTo(map); showToast('Você está aqui', 'crosshairs'); });
+        
+        // Close panel on click outside
+        document.addEventListener('click', (e) => {
+            if (!searchInput.contains(e.target) && !searchPanel.contains(e.target)) {
+                searchPanel.classList.add('opacity-0', 'invisible', '-translate-y-2');
+            }
+        });
+
+        updateGamification();
+    </script>
+</body>
+</html>
